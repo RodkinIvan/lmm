@@ -104,9 +104,11 @@ class MlxLmAdapter(ModelAdapter):
         self._model: Optional[Any] = None
         self._tokenizer: Optional[Any] = None
         self._sampler_factory: Optional[Any] = None
-        self._generate_fn: Optional[Any] = None
+        self._stream_generate_fn: Optional[Any] = None
+        self._cache_utils: Optional[Any] = None
         self._hook_info: Optional[Tuple[int, int]] = None
         self._resolved_decoding_strategy: Optional[str] = None
+        self._conversation_cache: Optional[Any] = None
 
     def register_hook(self, event: str, callback) -> None:
         self._hook_manager.register(event, callback)
@@ -149,6 +151,7 @@ class MlxLmAdapter(ModelAdapter):
         except Exception as exc:
             info["model_ready"] = False
             info["model_load_error"] = str(exc)
+        self.memory_module.set_prefix_cache(self._conversation_cache)
         self._call_memory_update("pre_hooks", info)
         self._hook_manager.emit("user_message", info)
         self._call_memory_update("post_hooks", info)
@@ -179,7 +182,8 @@ class MlxLmAdapter(ModelAdapter):
             return
 
         try:
-            from mlx_lm import generate, load
+            from mlx_lm import load, stream_generate
+            from mlx_lm.models import cache as cache_utils
             from mlx_lm.sample_utils import make_sampler
         except Exception as exc:
             raise RuntimeError(
@@ -189,7 +193,8 @@ class MlxLmAdapter(ModelAdapter):
         model_reference = self._resolve_model_reference()
         self._model, self._tokenizer = load(model_reference)
         self._sampler_factory = make_sampler
-        self._generate_fn = generate
+        self._stream_generate_fn = stream_generate
+        self._cache_utils = cache_utils
         self._install_memory_hook()
         self.memory_module.attach_runtime(
             model=self._model,
@@ -295,20 +300,31 @@ class MlxLmAdapter(ModelAdapter):
             self._model is None
             or self._tokenizer is None
             or self._sampler_factory is None
-            or self._generate_fn is None
+            or self._stream_generate_fn is None
+            or self._cache_utils is None
         ):
             raise RuntimeError("Model backend failed to initialize.")
 
         prompt = self._build_prompt(messages, add_generation_prompt=True)
         sampler = self._resolve_sampler(temperature, top_p)
-        text = self._generate_fn(
+        prompt_cache = self._cache_utils.make_prompt_cache(self._model)
+        text_parts: List[str] = []
+        for response in self._stream_generate_fn(
             self._model,
             self._tokenizer,
             prompt,
             max_tokens=max_tokens,
             sampler=sampler,
-            verbose=self.verbose,
-        )
+            prompt_cache=prompt_cache,
+        ):
+            if response.text:
+                text_parts.append(response.text)
+                if self.verbose:
+                    print(response.text, end="", flush=True)
+        if self.verbose:
+            print()
+        self._conversation_cache = copy.deepcopy(prompt_cache)
+        text = "".join(text_parts)
         return text.strip()
 
     @property

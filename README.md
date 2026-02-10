@@ -82,8 +82,9 @@ For `lora_on_user`, `post_hooks` also attempts to compute cross-entropy loss and
 gradients (`grad_A_norm`, `grad_B_norm`) on the latest user message tokens while
 conditioning on the full previous chat context, then runs exactly one optimizer
 step to update `A` and `B` (default optimizer: `AdamW`).
-For speed, this uses a frozen-prefix KV cache for the prior context and computes
-loss/gradients on the user segment on top of that cache.
+For speed, this uses a frozen-prefix KV cache from past generation when
+available, and computes loss/gradients on the user segment on top of that cache
+(fallback: rebuild prefix cache).
 
 It also logs token-wise CE values before averaging:
 
@@ -96,6 +97,17 @@ It also logs token-wise CE values before averaging:
 
 Optimization objective uses only filtered content tokens with CE strictly above
 the filtered-token average for that response.
+
+## Memorization Smoke Test
+
+Use the included script to run a simple two-session memorization check over
+10 names (teach/save, then load/query):
+
+```bash
+conda run -n ai python -m scripts.memorization_smoke \
+  --backend mlx_lm \
+  --model google/gemma-3-1b-it
+```
 
 ## Project layout
 

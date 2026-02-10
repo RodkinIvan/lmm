@@ -27,9 +27,11 @@ class LoraOnUserMemoryModule(MemoryModule):
         optimizer_name: str = "adamw",
         learning_rate: float = 1e-3,
         weight_decay: float = 0.01,
+        l2_regularization: float = 0.0,
         betas: Tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         use_prefix_cache_for_loss: bool = True,
+        optimization_steps: int = 1,
     ) -> None:
         self.info: Dict[str, Any] = {}
         self.update_history: List[Dict[str, Any]] = []
@@ -38,9 +40,11 @@ class LoraOnUserMemoryModule(MemoryModule):
         self.optimizer_name = optimizer_name.strip().lower()
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.l2_regularization = max(0.0, float(l2_regularization))
         self.betas = betas
         self.eps = eps
         self.use_prefix_cache_for_loss = use_prefix_cache_for_loss
+        self.optimization_steps = max(1, int(optimization_steps))
 
         self.A = None
         self.B = None
@@ -57,6 +61,7 @@ class LoraOnUserMemoryModule(MemoryModule):
         self.last_user_token_count: int = 0
         self.last_grad_norms: Dict[str, float] = {}
         self.last_grads = None
+        self._prefix_cache_for_loss = None
         self.excluded_decoded_tokens = {
             "<start_of_turn>",
             "<end_of_turn>",
@@ -75,6 +80,9 @@ class LoraOnUserMemoryModule(MemoryModule):
         self._model = model
         self._tokenizer = tokenizer
         self._prompt_builder = prompt_builder
+
+    def set_prefix_cache(self, cache: Any) -> None:
+        self._prefix_cache_for_loss = cache
 
     def _import_mlx(self):
         import mlx.core as mx
@@ -223,6 +231,7 @@ class LoraOnUserMemoryModule(MemoryModule):
         if len(token_losses) == 0:
             return [], [], 0.0, False
         avg = float(sum(token_losses) / len(token_losses))
+        # avg = 0.0
         indices = [i for i, v in enumerate(token_losses) if v > avg]
         fallback_used = False
         if len(indices) == 0:
@@ -283,7 +292,17 @@ class LoraOnUserMemoryModule(MemoryModule):
             raise RuntimeError("No target tokens available.")
 
         prefix_cache = None
-        if self.use_prefix_cache_for_loss:
+        if self.use_prefix_cache_for_loss and self._prefix_cache_for_loss is not None:
+            try:
+                from mlx_lm.models import cache as cache_utils
+
+                prefix_cache = copy.deepcopy(self._prefix_cache_for_loss)
+                if target_start > 0 and cache_utils.can_trim_prompt_cache(prefix_cache):
+                    cache_utils.trim_prompt_cache(prefix_cache, 1)
+            except Exception:
+                prefix_cache = None
+
+        if self.use_prefix_cache_for_loss and prefix_cache is None:
             try:
                 from mlx_lm.models import cache as cache_utils
             except Exception as exc:
@@ -384,7 +403,14 @@ class LoraOnUserMemoryModule(MemoryModule):
             high_mask = mask_kept * (token_losses > kept_mean).astype(token_losses.dtype)
             high_count = mx.sum(high_mask)
             effective_mask = mx.where(high_count > 0, high_mask, mask_kept)
-            return mx.sum(token_losses * effective_mask) / mx.sum(effective_mask)
+            ce_loss = mx.sum(token_losses * effective_mask) / mx.sum(effective_mask)
+            if self.l2_regularization <= 0.0:
+                return ce_loss
+            l2_penalty = self.l2_regularization * (
+                mx.sum(ab_params["A"] * ab_params["A"])
+                + mx.sum(ab_params["B"] * ab_params["B"])
+            )
+            return ce_loss + l2_penalty
 
         loss, grads = mx.value_and_grad(loss_fn)(params, input_tokens, target_tokens)
         selected_targets, token_losses = self._forward_user_span(
@@ -453,25 +479,36 @@ class LoraOnUserMemoryModule(MemoryModule):
         if stage == "post_hooks" and event == "user_message":
             messages = info.get("messages", [])
             try:
-                full_tokens, user_start, total_tokens = self._get_user_token_span(messages)
-                (
-                    loss,
-                    num_user_tokens,
-                    grad_norms,
-                    grads,
-                    token_ids,
-                    token_losses,
-                    raw_token_ids,
-                    raw_token_losses,
-                    high_token_ids,
-                    high_token_losses,
-                    loss_threshold,
-                    high_loss_fallback_used,
-                ) = self._compute_loss_and_grads(
-                    full_tokens,
-                    user_start,
+                full_tokens, user_start, total_tokens = self._get_user_token_span(
+                    messages
                 )
-                param_norms = self._apply_optimizer_step(grads)
+                optimization_losses: List[float] = []
+                last_values = None
+                for _ in range(self.optimization_steps):
+                    last_values = self._compute_loss_and_grads(
+                        full_tokens,
+                        user_start,
+                    )
+                    (
+                        loss,
+                        num_user_tokens,
+                        grad_norms,
+                        grads,
+                        token_ids,
+                        token_losses,
+                        raw_token_ids,
+                        raw_token_losses,
+                        high_token_ids,
+                        high_token_losses,
+                        loss_threshold,
+                        high_loss_fallback_used,
+                    ) = last_values
+                    optimization_losses.append(loss)
+                    param_norms = self._apply_optimizer_step(grads)
+
+                if last_values is None:
+                    raise RuntimeError("No optimization step executed.")
+
                 info["user_response_loss"] = loss
                 info["user_response_token_count"] = num_user_tokens
                 info["context_token_count"] = max(0, user_start)
@@ -499,7 +536,10 @@ class LoraOnUserMemoryModule(MemoryModule):
                 info["param_B_norm"] = param_norms["B"]
                 info["optimizer"] = self.optimizer_name
                 info["learning_rate"] = self.learning_rate
+                info["l2_regularization"] = self.l2_regularization
                 info["lora_rank"] = self.rank
+                info["optimization_steps"] = self.optimization_steps
+                info["optimization_step_losses"] = optimization_losses
                 if self._optimizer is not None:
                     info["optimizer_step"] = int(self._optimizer.step.item())
                 info["update_status"] = "ok"
@@ -526,6 +566,7 @@ class LoraOnUserMemoryModule(MemoryModule):
                 "optimizer_name": self.optimizer_name,
                 "learning_rate": str(self.learning_rate),
                 "weight_decay": str(self.weight_decay),
+                "l2_regularization": str(self.l2_regularization),
             }
             if self._optimizer is not None:
                 opt_flat = dict(tree_flatten(self._optimizer.state))
@@ -552,6 +593,13 @@ class LoraOnUserMemoryModule(MemoryModule):
             if "rank" in metadata:
                 try:
                     self.rank = int(metadata["rank"])
+                except Exception:
+                    pass
+            if "l2_regularization" in metadata:
+                try:
+                    self.l2_regularization = max(
+                        0.0, float(metadata["l2_regularization"])
+                    )
                 except Exception:
                     pass
 

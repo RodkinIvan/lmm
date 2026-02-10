@@ -40,6 +40,10 @@ class MemoryModule(ABC):
         """Attach runtime objects needed for advanced modules."""
         _ = (model, tokenizer, prompt_builder)
 
+    def set_prefix_cache(self, cache: Any) -> None:
+        """Provide cache for prefix context (optional)."""
+        _ = cache
+
     def save(self, path: str) -> dict[str, Any]:
         """Persist module state to disk."""
         _ = path
