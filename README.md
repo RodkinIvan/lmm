@@ -38,7 +38,7 @@ conda run -n ai python -m lmm.chat \
 If `--mm-load-path` does not exist, load is skipped.
 If `--mm-save-path` is omitted, save path defaults to:
 
-- `module_name_<YYYYMMDD_HHMMSS_microseconds>.safetensors`
+- `artifacts/module_name_<YYYYMMDD_HHMMSS_microseconds>.safetensors`
 
 `--mm-path` is still accepted as a legacy alias and sets both load/save paths.
 Save behavior on exit:
@@ -46,6 +46,14 @@ Save behavior on exit:
 - normal `exit` / `quit`: save
 - `Ctrl+D` (EOF): save
 - `Ctrl+C` (KeyboardInterrupt): skip save
+
+Decoding defaults to deterministic. You can control it via:
+
+- `--deterministic` / `--non-deterministic`
+- `--decoding-strategy auto|greedy|beam|sample`
+
+In the current `mlx_lm` API used here, beam search is not exposed, so `beam`
+falls back to greedy (deterministic mode) or sampling (non-deterministic mode).
 
 Use `--local-files-only` if model files are already cached and you want no network use:
 

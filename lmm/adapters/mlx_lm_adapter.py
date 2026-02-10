@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lmm.adapters.base import ModelAdapter
 from lmm.hooks import HookManager, hook_last_user_response
@@ -87,12 +87,16 @@ class MlxLmAdapter(ModelAdapter):
         local_files_only: bool = False,
         verbose: bool = False,
         activation_log_path: str = "logs/memory_activations.jsonl",
+        deterministic: bool = True,
+        decoding_strategy: str = "auto",
     ) -> None:
         self.model_id = model_id
         self.memory_module = memory_module
         self.local_files_only = local_files_only
         self.verbose = verbose
         self.activation_log_path = activation_log_path
+        self.deterministic = deterministic
+        self.decoding_strategy = decoding_strategy.strip().lower()
         self._activation_logger = ActivationLogger(activation_log_path)
         self._hook_manager = HookManager()
         self._hook_manager.register("user_message", hook_last_user_response)
@@ -102,6 +106,7 @@ class MlxLmAdapter(ModelAdapter):
         self._sampler_factory: Optional[Any] = None
         self._generate_fn: Optional[Any] = None
         self._hook_info: Optional[Tuple[int, int]] = None
+        self._resolved_decoding_strategy: Optional[str] = None
 
     def register_hook(self, event: str, callback) -> None:
         self._hook_manager.register(event, callback)
@@ -247,6 +252,36 @@ class MlxLmAdapter(ModelAdapter):
             parts.append("ASSISTANT:")
         return "\n".join(parts)
 
+    def _resolve_sampler(self, temperature: float, top_p: float) -> Callable[[Any], Any]:
+        if self._sampler_factory is None:
+            raise RuntimeError("Sampler factory is not initialized.")
+
+        strategy = self.decoding_strategy
+        if strategy not in {"auto", "greedy", "beam", "sample"}:
+            strategy = "auto"
+
+        if self.deterministic:
+            if strategy in {"auto", "beam", "greedy"}:
+                # Beam is not exposed by mlx_lm.generate in this API version.
+                # Fallback to greedy deterministic decoding.
+                self._resolved_decoding_strategy = (
+                    "greedy_fallback_from_beam" if strategy == "beam" else "greedy"
+                )
+                return lambda x: x.argmax(axis=-1)
+            # deterministic + sample requested -> still force greedy
+            self._resolved_decoding_strategy = "greedy_forced_deterministic"
+            return lambda x: x.argmax(axis=-1)
+
+        # Non-deterministic mode.
+        if strategy in {"beam", "auto", "greedy"}:
+            # No beam support -> sample for auto/beam when nondeterministic requested.
+            self._resolved_decoding_strategy = (
+                "sample_fallback_from_beam" if strategy == "beam" else "sample"
+            )
+        else:
+            self._resolved_decoding_strategy = "sample"
+        return self._sampler_factory(temp=temperature, top_p=top_p)
+
     def generate_reply(
         self,
         messages: List[Dict[str, str]],
@@ -265,7 +300,7 @@ class MlxLmAdapter(ModelAdapter):
             raise RuntimeError("Model backend failed to initialize.")
 
         prompt = self._build_prompt(messages, add_generation_prompt=True)
-        sampler = self._sampler_factory(temp=temperature, top_p=top_p)
+        sampler = self._resolve_sampler(temperature, top_p)
         text = self._generate_fn(
             self._model,
             self._tokenizer,

@@ -62,6 +62,23 @@ def parse_args() -> ChatConfig:
         help="Top-p sampling.",
     )
     parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        default=True,
+        help="Use deterministic decoding (default: true).",
+    )
+    parser.add_argument(
+        "--non-deterministic",
+        action="store_true",
+        help="Enable stochastic decoding.",
+    )
+    parser.add_argument(
+        "--decoding-strategy",
+        default="auto",
+        choices=["auto", "greedy", "beam", "sample"],
+        help="Decoding strategy preference.",
+    )
+    parser.add_argument(
         "--local-files-only",
         action="store_true",
         help="Resolve HF model from local cache only.",
@@ -94,6 +111,8 @@ def parse_args() -> ChatConfig:
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
+        deterministic=(False if args.non_deterministic else args.deterministic),
+        decoding_strategy=args.decoding_strategy,
         local_files_only=args.local_files_only,
         system_prompt=args.system_prompt,
         verbose=args.verbose,
@@ -102,7 +121,7 @@ def parse_args() -> ChatConfig:
 
 def _default_mm_save_path(module_name: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    return f"{module_name}_{ts}.safetensors"
+    return f"artifacts/{module_name}_{ts}.safetensors"
 
 
 def run_chat(config: ChatConfig) -> None:
@@ -114,6 +133,8 @@ def run_chat(config: ChatConfig) -> None:
         local_files_only=config.local_files_only,
         verbose=config.verbose,
         activation_log_path=config.activation_log_path,
+        deterministic=config.deterministic,
+        decoding_strategy=config.decoding_strategy,
     )
     engine = ChatEngine(
         adapter=adapter,
@@ -150,7 +171,8 @@ def run_chat(config: ChatConfig) -> None:
 
     print("LMM chat started. Type 'exit' or 'quit' to stop.")
     print(
-        f"backend={config.backend} model={config.model_id} memory={config.memory_module}"
+        f"backend={config.backend} model={config.model_id} memory={config.memory_module} "
+        f"deterministic={config.deterministic} decoding={config.decoding_strategy}"
     )
 
     exit_requested = False

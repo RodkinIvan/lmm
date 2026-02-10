@@ -12,6 +12,8 @@ class ChatConfig:
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 0.95
+    deterministic: bool = True
+    decoding_strategy: str = "auto"
     local_files_only: bool = False
     system_prompt: str = ""
     verbose: bool = False

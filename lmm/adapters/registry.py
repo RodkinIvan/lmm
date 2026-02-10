@@ -11,6 +11,8 @@ def create_adapter(
     local_files_only: bool,
     verbose: bool,
     activation_log_path: str,
+    deterministic: bool,
+    decoding_strategy: str,
 ) -> ModelAdapter:
     normalized = backend.strip().lower()
     if normalized in {"mlx", "mlx_lm", "mlxlm"}:
@@ -20,5 +22,7 @@ def create_adapter(
             local_files_only=local_files_only,
             verbose=verbose,
             activation_log_path=activation_log_path,
+            deterministic=deterministic,
+            decoding_strategy=decoding_strategy,
         )
     raise ValueError(f"Unknown backend '{backend}'. Available backends: mlx_lm")
