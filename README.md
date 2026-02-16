@@ -11,6 +11,10 @@ Local Memory Module (LMM) playground.
   - `lora_on_user`: applies `hidden + hidden @ A @ B` where
     `A in R[d_model x r]` (normal init) and `B in R[r x d_model]` (zero init).
     Because `B` starts as zeros, initial behavior is identity.
+  - `hash_gradient`: hash-based correction memory. A conceptual `2^r x d_model`
+    table stores correction rows indexed by a binary hash of middle-layer hidden
+    states. On user updates, high-CE tokens update their hashed row by a few
+    gradient steps on that token loss.
 
 ## Run (conda `ai` env)
 
@@ -19,6 +23,15 @@ conda run -n ai python -m lmm.chat \
   --backend mlx_lm \
   --model google/gemma-3-1b-it \
   --memory identity
+```
+
+Try hash-based memory:
+
+```bash
+conda run -n ai python -m lmm.chat \
+  --backend mlx_lm \
+  --model google/gemma-3-1b-it \
+  --memory hash_gradient
 ```
 
 Then type messages in the prompt. Type `exit` or `quit` to stop.
