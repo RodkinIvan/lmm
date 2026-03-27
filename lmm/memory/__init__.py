@@ -1,5 +1,6 @@
 from lmm.memory.activation_logger import ActivationLogger
 from lmm.memory.base import MemoryContext, MemoryModule
+from lmm.memory.consolidation_lora_ffn import ConsolidationLoraFfnMemoryModule
 from lmm.memory.hash_gradient import HashGradientMemoryModule
 from lmm.memory.identity import IdentityMemoryModule
 from lmm.memory.lora_on_user import LoraOnUserMemoryModule
@@ -9,6 +10,7 @@ __all__ = [
     "ActivationLogger",
     "MemoryContext",
     "MemoryModule",
+    "ConsolidationLoraFfnMemoryModule",
     "HashGradientMemoryModule",
     "IdentityMemoryModule",
     "LoraOnUserMemoryModule",

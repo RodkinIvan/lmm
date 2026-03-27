@@ -9,6 +9,7 @@ description = "Local Memory Module experiments for chat models"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "datasets>=2.20.0",
   "mlx-lm>=0.30.0",
 ]
 

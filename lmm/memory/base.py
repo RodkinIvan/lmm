@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class MemoryContext:
     layer_index: int
     total_layers: int

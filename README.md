@@ -11,6 +11,9 @@ Local Memory Module (LMM) playground.
   - `lora_on_user`: applies `hidden + hidden @ A @ B` where
     `A in R[d_model x r]` (normal init) and `B in R[r x d_model]` (zero init).
     Because `B` starts as zeros, initial behavior is identity.
+  - `consolidation_lora_ffn`: LoRA on FFN blocks. During a chat session it only
+    collects user examples. On session end (memory save), it runs consolidation
+    optimization combining general streamed data loss and session-user loss.
   - `hash_gradient`: hash-based correction memory. A conceptual `2^r x d_model`
     table stores correction rows indexed by a binary hash of middle-layer hidden
     states. On user updates, high-CE tokens update their hashed row by a few
@@ -47,6 +50,37 @@ conda run -n ai python -m lmm.chat \
   --mm-load-path artifacts/lora_mm_prev.safetensors \
   --mm-save-path artifacts/lora_mm_next.safetensors
 ```
+
+Consolidation module example (consolidation happens on save/exit):
+
+```bash
+conda run -n ai python -m lmm.chat \
+  --backend mlx_lm \
+  --model google/gemma-3-1b-it \
+  --memory consolidation_lora_ffn \
+  --mm-load-path artifacts/cons_prev.safetensors \
+  --mm-save-path artifacts/cons_next.safetensors
+```
+
+For a user-only consolidation smoke run (no streamed general-data sampling), set
+`LMM_CONS_GENERAL_BATCH=0`.
+
+Consolidation optimization logs (batch previews + per-step losses) are written to
+`logs/consolidation_training.jsonl` by default. Configure with:
+
+- `LMM_CONS_LOG_PATH` (set empty to disable)
+- `LMM_CONS_LOG_MAX_SAMPLES` (preview samples per step)
+- `LMM_CONS_LOG_TEXT_CHARS` (text truncation length)
+- `LMM_CONS_LOG_PREFIX_TURNS` (how many trailing prefix turns to show)
+
+Current tuned defaults are: `LMM_CONS_STEPS=12`, `LMM_CONS_GENERAL_BATCH=2`,
+`LMM_CONS_USER_BATCH=2`.
+
+General-data sampling safety knobs:
+
+- `LMM_CONS_GENERAL_INIT_TIMEOUT` (seconds for dataset stream init)
+- `LMM_CONS_GENERAL_NEXT_TIMEOUT` (seconds for each next-row fetch)
+- `LMM_CONS_SYNTHETIC_GENERAL_FALLBACK` (`true/false`, fallback keeps batches non-empty if dataset stalls)
 
 If `--mm-load-path` does not exist, load is skipped.
 If `--mm-save-path` is omitted, save path defaults to:
